@@ -13,7 +13,7 @@ DATA_DIR = "data"
 MODEL_PATH = "pokemon_model.keras"      # use modern Keras format
 CLASS_NAMES_PATH = "class_names.json"
 IMG_SIZE = (180, 180)
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 EPOCHS = 10
 
 # --- SET MIXED PRECISION POLICY IF SUPPORTED ---
