@@ -2,3 +2,17 @@ data/
 venv/
 verify_tf.py
 chromedriver-win64/
+.env
+logs/
+model/
+data/
+k8s/
+.vscode/
+.DS_Store
+.idea/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pokemon-recognizer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pokemon-recognizer
+  template:
+    metadata:
+      labels:
+        app: pokemon-recognizer
+    spec:
+      containers:
+      - name: api
+        image: dvdthr/pokemon-recognizer:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODEL_PATH
+          value: /app/pokemon_model.h5
+        - name: CLASS_NAMES_PATH
+          value: /app/class_names.json

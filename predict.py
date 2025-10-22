@@ -4,11 +4,9 @@ from tensorflow.keras.preprocessing import image
 import matplotlib.pyplot as plt
 import os
 import json
+from config import MODEL_PATH, CLASS_NAMES_PATH, TEST_FOLDER, set_seed
 
-# --- CONFIG ---
-MODEL_PATH = "pokemon_model.h5"     # your trained model
-TEST_FOLDER = "test_images"         # folder with images to test
-CLASS_NAMES_PATH = "class_names.json"  # file generated during training
+set_seed()
 
 # --- LOAD TRAINED MODEL ---
 print(f"📦 Loading model from {MODEL_PATH}...")
