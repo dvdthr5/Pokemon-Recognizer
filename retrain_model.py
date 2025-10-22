@@ -33,17 +33,16 @@ train_ds = tf.keras.utils.image_dataset_from_directory(
     os.path.join(DATA_DIR, "train"),
     image_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
-    label_mode="categorical",
-    num_parallel_calls=tf.data.AUTOTUNE
+    label_mode="categorical"
 )
 
 val_ds = tf.keras.utils.image_dataset_from_directory(
     os.path.join(DATA_DIR, "test"),
     image_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
-    label_mode="categorical",
-    num_parallel_calls=tf.data.AUTOTUNE
+    label_mode="categorical"
 )
+
 
 # --- SAVE CLASS NAMES ---
 class_names = train_ds.class_names
@@ -126,7 +125,7 @@ history = model.fit(
     validation_data=val_ds,
     epochs=EPOCHS,
     callbacks=[checkpoint_cb, early_stopping_cb, reduce_lr_cb, tensorboard_cb],
-    verbose=2
+    verbose=1
 )
 
 # --- UNFREEZE TOP LAYERS FOR FINE-TUNING ---
@@ -148,7 +147,7 @@ history_fine = model.fit(
     validation_data=val_ds,
     epochs=fine_tune_epochs,
     callbacks=[checkpoint_cb, early_stopping_cb, reduce_lr_cb, tensorboard_cb],
-    verbose=2
+    verbose=1
 )
 
 # --- SAVE FINAL MODEL ---
