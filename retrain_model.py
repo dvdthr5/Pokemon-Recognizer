@@ -13,7 +13,7 @@ DATA_DIR = "data"
 MODEL_PATH = "pokemon_model.keras"      # use modern Keras format
 CLASS_NAMES_PATH = "class_names.json"
 IMG_SIZE = (180, 180)
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 EPOCHS = 10
 
 # --- SET MIXED PRECISION POLICY IF SUPPORTED ---
@@ -58,8 +58,8 @@ print(f"🧩 Found {num_classes} Pokémon classes.")
 preprocess_layer = layers.Lambda(preprocess_input)
 data_augmentation = keras.Sequential([
     layers.RandomFlip("horizontal"),
-    layers.RandomRotation(0.1),
-    layers.RandomZoom(0.1),
+    layers.RandomRotation(0.05),
+    layers.RandomZoom(0.05),
 ])
 
 def preprocess_and_augment(x, y):
@@ -67,11 +67,12 @@ def preprocess_and_augment(x, y):
     x = data_augmentation(x)
     return x, y
 
-# --- APPLY PREPROCESSING AND AUGMENTATION TO TRAIN DATA ---
-train_ds = train_ds.map(preprocess_and_augment)
-train_ds = train_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
-val_ds = val_ds.map(lambda x, y: (preprocess_layer(x), y))
-val_ds = val_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
+# --- APPLY PREPROCESSING, SHUFFLING, AND AUGMENTATION TO TRAIN DATA ---
+train_ds = train_ds.shuffle(1000)
+train_ds = train_ds.map(preprocess_and_augment, num_parallel_calls=tf.data.AUTOTUNE)
+train_ds = train_ds.prefetch(buffer_size=tf.data.AUTOTUNE)
+val_ds = val_ds.map(lambda x, y: (preprocess_layer(x), y), num_parallel_calls=tf.data.AUTOTUNE)
+val_ds = val_ds.prefetch(buffer_size=tf.data.AUTOTUNE)
 
 # --- BUILD MODEL ---
 print("🆕 Creating new model with MobileNetV2 backbone...")
@@ -90,7 +91,7 @@ output = layers.Dense(num_classes, activation="softmax")(x)
 model = keras.Model(inputs=base_model.input, outputs=output)
 
 # --- COMPILE MODEL (HEAD TRAINING) ---
-optimizer = Adam(learning_rate=0.0005)
+optimizer = Adam(learning_rate=1e-4)
 model.compile(optimizer=optimizer,
               loss="categorical_crossentropy",
               metrics=["accuracy"])
@@ -135,8 +136,12 @@ for layer in base_model.layers[:-40]:  # keep earlier layers frozen
     layer.trainable = False
 for layer in base_model.layers[-40:]:
     layer.trainable = True
+# Freeze BatchNormalization layers during fine-tuning
+for layer in base_model.layers:
+    if isinstance(layer, tf.keras.layers.BatchNormalization):
+        layer.trainable = False
 
-model.compile(optimizer=Adam(learning_rate=0.0001),
+model.compile(optimizer=Adam(learning_rate=1e-4),
               loss="categorical_crossentropy",
               metrics=["accuracy"])
 
