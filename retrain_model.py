@@ -8,13 +8,23 @@ from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
 # --- CONFIG ---
-tf.config.run_functions_eagerly(True)  # ensure eager execution for safety/debug
+tf.config.run_functions_eagerly(False)  # ensure graph execution for better optimization
 DATA_DIR = "data"
 MODEL_PATH = "pokemon_model.keras"      # use modern Keras format
 CLASS_NAMES_PATH = "class_names.json"
 IMG_SIZE = (180, 180)
-BATCH_SIZE = 32
+BATCH_SIZE = 128
 EPOCHS = 10
+
+# --- SET MIXED PRECISION POLICY IF SUPPORTED ---
+try:
+    from tensorflow.keras.mixed_precision import experimental as mixed_precision
+    policy = mixed_precision.Policy('mixed_bfloat16')
+    mixed_precision.set_policy(policy)
+    print(f"⚡ Mixed precision policy set to: {policy}")
+except Exception:
+    # fallback if mixed precision is not supported
+    print("⚡ Mixed precision not supported, using default float32 policy")
 
 print("📂 Loading dataset...")
 
@@ -23,14 +33,16 @@ train_ds = tf.keras.utils.image_dataset_from_directory(
     os.path.join(DATA_DIR, "train"),
     image_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
-    label_mode="categorical"
+    label_mode="categorical",
+    num_parallel_calls=tf.data.AUTOTUNE
 )
 
 val_ds = tf.keras.utils.image_dataset_from_directory(
     os.path.join(DATA_DIR, "test"),
     image_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
-    label_mode="categorical"
+    label_mode="categorical",
+    num_parallel_calls=tf.data.AUTOTUNE
 )
 
 # --- SAVE CLASS NAMES ---
@@ -113,7 +125,8 @@ history = model.fit(
     train_ds,
     validation_data=val_ds,
     epochs=EPOCHS,
-    callbacks=[checkpoint_cb, early_stopping_cb, reduce_lr_cb, tensorboard_cb]
+    callbacks=[checkpoint_cb, early_stopping_cb, reduce_lr_cb, tensorboard_cb],
+    verbose=2
 )
 
 # --- UNFREEZE TOP LAYERS FOR FINE-TUNING ---
@@ -134,7 +147,8 @@ history_fine = model.fit(
     train_ds,
     validation_data=val_ds,
     epochs=fine_tune_epochs,
-    callbacks=[checkpoint_cb, early_stopping_cb, reduce_lr_cb, tensorboard_cb]
+    callbacks=[checkpoint_cb, early_stopping_cb, reduce_lr_cb, tensorboard_cb],
+    verbose=2
 )
 
 # --- SAVE FINAL MODEL ---
