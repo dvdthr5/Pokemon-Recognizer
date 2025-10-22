@@ -14,7 +14,7 @@ MODEL_PATH = "pokemon_model.keras"      # use modern Keras format
 CLASS_NAMES_PATH = "class_names.json"
 IMG_SIZE = (180, 180)
 BATCH_SIZE = 32
-EPOCHS = 10
+EPOCHS = 20
 
 # --- SET MIXED PRECISION POLICY IF SUPPORTED ---
 try:
@@ -74,24 +74,10 @@ train_ds = train_ds.prefetch(buffer_size=tf.data.AUTOTUNE)
 val_ds = val_ds.map(lambda x, y: (preprocess_layer(x), y), num_parallel_calls=tf.data.AUTOTUNE)
 val_ds = val_ds.prefetch(buffer_size=tf.data.AUTOTUNE)
 
-# --- BUILD MODEL ---
-print("🆕 Creating new model with MobileNetV2 backbone...")
-
-base_model = MobileNetV2(input_shape=IMG_SIZE + (3,),
-                         include_top=False,
-                         weights="imagenet")
-base_model.trainable = False  # freeze pretrained convolutional layers
-
-# Add custom classifier head
-x = layers.GlobalAveragePooling2D()(base_model.output)
-x = layers.Dense(512, activation="relu")(x)
-x = layers.Dropout(0.4)(x)
-output = layers.Dense(num_classes, activation="softmax")(x)
-
-model = keras.Model(inputs=base_model.input, outputs=output)
-
-# --- COMPILE MODEL (HEAD TRAINING) ---
-optimizer = Adam(learning_rate=1e-4)
+print("📦 Loading previously trained model...")
+model = tf.keras.models.load_model(MODEL_PATH)
+print("✅ Model loaded successfully, continuing training...")
+optimizer = Adam(learning_rate=1e-5)
 model.compile(optimizer=optimizer,
               loss="categorical_crossentropy",
               metrics=["accuracy"])
@@ -141,7 +127,7 @@ for layer in base_model.layers:
     if isinstance(layer, tf.keras.layers.BatchNormalization):
         layer.trainable = False
 
-model.compile(optimizer=Adam(learning_rate=1e-4),
+model.compile(optimizer=Adam(learning_rate=1e-5),
               loss="categorical_crossentropy",
               metrics=["accuracy"])
 
