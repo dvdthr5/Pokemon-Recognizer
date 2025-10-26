@@ -1,21 +1,20 @@
 import argparse
-import json
 import os
 import sys
 import time
+import random
 import urllib.parse
-from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import List, Optional
+from io import BytesIO
 
 import requests
 from PIL import Image
-from io import BytesIO
 from selenium import webdriver
 from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    ElementNotInteractableException,
     NoSuchElementException,
     WebDriverException,
+    ElementClickInterceptedException,
+    ElementNotInteractableException,
 )
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -25,32 +24,40 @@ from selenium.webdriver.common.by import By
 BASE_DIR = "data"
 TRAIN_DIR = os.path.join(BASE_DIR, "train")
 TEST_DIR = os.path.join(BASE_DIR, "test")
-DEFAULT_TARGET_TRAIN = 240
-DEFAULT_TARGET_TEST = 60
+TRAIN_TARGET = 240
+TEST_TARGET = 60
 
 ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png")
 ALLOWED_MIME_KEYWORDS = ("image/jpeg", "image/jpg", "image/png")
-CARD_KEYWORDS = ("card", "tcg", "trading", "promo", "full art", "gx", "ex", "vmax", "vstar", "trainer")
+CARD_KEYWORDS = (
+    "card",
+    "tcg",
+    "trading",
+    "promo",
+    "full art",
+    "holo",
+    "gx",
+    "ex",
+    "vmax",
+    "vstar",
+    "trainer",
+)
 TRAIN_CARD_QUERIES = [
-    "pokemon tcg card scan",
-    "pokemon trading card holo",
-    "pokemon tcg full art card",
-    "pokemon tcg promo card",
+    "tcg card scan",
+    "pokemon trading card full art",
+    "pokemon promo card",
+    "pokemon tcg holo",
 ]
 TEST_CARD_QUERIES = [
-    "pokemon tcg card illustration",
-    "pokemon tcg reverse holo card",
-    "pokemon tcg promo scan",
+    "pokemon tcg card artwork",
+    "pokemon tcg illustration",
+    "pokemon tcg reverse holo",
 ]
-GOOGLE_IMAGE_URL = "https://www.google.com/search?tbm=isch&q="
-DEFAULT_MIN_IMAGE_WIDTH = 150
-DEFAULT_MIN_IMAGE_HEIGHT = 150
-SEE_MORE_SELECTORS = [
-    ".mye4qd",
-]
-SEE_MORE_CLICK_ATTEMPTS = 6
-SCROLL_PASSES = 30
-SCROLL_PAUSE_SECONDS = 0.8
+BING_IMAGE_SEARCH_URL = "https://www.bing.com/images/search?q="
+DEFAULT_MIN_WIDTH = 150
+DEFAULT_MIN_HEIGHT = 150
+SCROLL_PAUSE = 0.8
+SCROLL_PASSES = 25
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -59,23 +66,15 @@ REQUEST_HEADERS = {
 }
 
 
-@dataclass
-class ImageCandidate:
-    url: str
-    alt_text: str
-    width: Optional[int] = None
-    height: Optional[int] = None
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Download Pokémon TCG images for train/test datasets.")
+    parser = argparse.ArgumentParser(description="Download Pokémon TCG card images for train/test datasets.")
     parser.add_argument(
         "names",
         nargs="*",
         help="Optional list of Pokémon names to scrape. Defaults to names in pokemon_list.txt.",
     )
-    parser.add_argument("--train-target", type=int, default=DEFAULT_TARGET_TRAIN, help="Images per Pokémon for train.")
-    parser.add_argument("--test-target", type=int, default=DEFAULT_TARGET_TEST, help="Images per Pokémon for test.")
+    parser.add_argument("--train-target", type=int, default=TRAIN_TARGET, help="Images per Pokémon for train.")
+    parser.add_argument("--test-target", type=int, default=TEST_TARGET, help="Images per Pokémon for test.")
     parser.add_argument(
         "--pokemon-list",
         default="pokemon_list.txt",
@@ -89,13 +88,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-width",
         type=int,
-        default=DEFAULT_MIN_IMAGE_WIDTH,
+        default=DEFAULT_MIN_WIDTH,
         help="Minimum width (pixels) a downloaded image must have to be saved.",
     )
     parser.add_argument(
         "--min-height",
         type=int,
-        default=DEFAULT_MIN_IMAGE_HEIGHT,
+        default=DEFAULT_MIN_HEIGHT,
         help="Minimum height (pixels) a downloaded image must have to be saved.",
     )
     return parser.parse_args()
@@ -161,105 +160,40 @@ def count_image_files(folder: str) -> int:
 
 
 def build_query(pokemon: str, modifier: str) -> str:
-    core = f"{pokemon} pokemon".strip()
+    core = f"{pokemon} pokemon card".strip()
     return f"{core} {modifier}".strip()
 
 
 def scroll_results(driver: webdriver.Chrome, passes: int = SCROLL_PASSES) -> None:
-    last_height = 0
+    last_height = driver.execute_script("return document.body.scrollHeight")
     for _ in range(passes):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(SCROLL_PAUSE_SECONDS)
+        time.sleep(SCROLL_PAUSE)
         new_height = driver.execute_script("return document.body.scrollHeight")
         if new_height == last_height:
             break
         last_height = new_height
 
 
-def click_see_more_button(driver: webdriver.Chrome) -> bool:
-    for selector in SEE_MORE_SELECTORS:
-        try:
-            button = driver.find_element(By.CSS_SELECTOR, selector)
-        except NoSuchElementException:
-            continue
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
-        time.sleep(0.5)
-        try:
-            driver.execute_script("arguments[0].click();", button)
-        except ElementClickInterceptedException:
-            try:
-                button.click()
-            except Exception:
-                continue
-        except ElementNotInteractableException:
-            continue
-        time.sleep(1.2)
-        return True
-    return False
-
-
-def expand_search_results(driver: webdriver.Chrome) -> None:
-    scroll_results(driver)
-    for _ in range(SEE_MORE_CLICK_ATTEMPTS):
-        clicked = click_see_more_button(driver)
-        if not clicked:
-            break
-        scroll_results(driver, passes=max(4, SCROLL_PASSES // 2))
-
-
-def has_allowed_extension(url: str) -> bool:
-    parsed = urllib.parse.urlparse(url)
-    path = parsed.path.lower()
-    return any(path.endswith(ext) for ext in ALLOWED_EXTENSIONS)
-
-
-def looks_like_card(url: str, alt_text: str, modifier: str) -> bool:
-    haystack = f"{alt_text} {url} {modifier}".lower()
-    return any(keyword in haystack for keyword in CARD_KEYWORDS)
-
-
-def gather_candidates(driver: webdriver.Chrome, pokemon: str, modifier: str) -> List[ImageCandidate]:
+def gather_candidates(driver: webdriver.Chrome, pokemon: str, modifier: str) -> List[str]:
     query = build_query(pokemon, modifier)
-    search_url = f"{GOOGLE_IMAGE_URL}{urllib.parse.quote_plus(query)}"
-
-    print(f"\n🔍 Searching: '{query}'")
+    search_url = f"{BING_IMAGE_SEARCH_URL}{urllib.parse.quote_plus(query)}"
+    print(f"\n🔍 Searching for '{query}'")
     driver.get(search_url)
+    scroll_results(driver)
 
-    # Scroll to load images
-    for _ in range(SCROLL_PASSES):
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(SCROLL_PAUSE_SECONDS)
-        try:
-            see_more = driver.find_element(By.CSS_SELECTOR, ".mye4qd")
-            if see_more.is_displayed():
-                driver.execute_script("arguments[0].click();", see_more)
-                time.sleep(SCROLL_PAUSE_SECONDS)
-        except NoSuchElementException:
-            pass
-
-    images = driver.find_elements(By.CSS_SELECTOR, ".rg_i")
-    candidates: List[ImageCandidate] = []
-    seen_urls = set()
+    # Bing image thumbnails have class 'mimg'
+    images = driver.find_elements(By.CSS_SELECTOR, "img.mimg")
+    urls = set()
     for img in images:
-        src = img.get_attribute("src") or img.get_attribute("data-src")
-        alt_text = img.get_attribute("alt") or ""
-        if not src:
-            continue
-        if src in seen_urls:
-            continue
-        seen_urls.add(src)
-        candidates.append(ImageCandidate(url=src, alt_text=alt_text))
-    print(f"🖼️ Found {len(candidates)} candidates for '{pokemon}' ({modifier}).")
-    return candidates
+        src = img.get_attribute("src")
+        if src and src.startswith("http") and src not in urls:
+            urls.add(src)
+    print(f"🖼️ Found {len(urls)} image candidates for '{pokemon}' ({modifier}).")
+    return list(urls)
 
 
-def ensure_rgb(image: Image.Image) -> Image.Image:
-    if image.mode in ("RGB", "L"):
-        return image.convert("RGB")
-    return image.convert("RGB")
-
-
-def fetch_image(
+def fetch_and_save_image(
     session: requests.Session,
     url: str,
     folder: str,
@@ -272,34 +206,32 @@ def fetch_image(
         response = session.get(url, timeout=12)
         response.raise_for_status()
         content_type = response.headers.get("Content-Type", "").lower()
-        if content_type:
-            if not any(mime in content_type for mime in ALLOWED_MIME_KEYWORDS):
-                return None
-        else:
-            if not has_allowed_extension(url):
-                return None
+        if content_type and "image" not in content_type:
+            print(f"⚠️ Skipping invalid image content type: {content_type}")
+            return None
 
-        is_png = "png" in content_type if content_type else url.lower().endswith(".png")
-        image_format = "PNG" if is_png else "JPEG"
-        extension = ".png" if image_format == "PNG" else ".jpg"
-        filename = f"{pokemon}_{index:03d}{extension}"
+        image = Image.open(BytesIO(response.content))
+        image.verify()  # Verify image integrity
+        image = Image.open(BytesIO(response.content))  # Reopen for processing
+        width, height = image.size
+        if width < min_width or height < min_height:
+            print(f"⚠️ Skipping image smaller than {min_width}x{min_height}: {width}x{height}")
+            return None
+
+        # Convert all images to JPEG format
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        filename = f"{pokemon}_{index:03d}.jpg"
         filepath = os.path.join(folder, filename)
         if os.path.exists(filepath):
             return None
 
-        raw_image = Image.open(BytesIO(response.content))
-        raw_image.verify()
-        raw_image = Image.open(BytesIO(response.content))
-        width, height = raw_image.size
-        if width < min_width or height < min_height:
-            return None
-
-        if image_format == "JPEG":
-            raw_image = ensure_rgb(raw_image)
-
-        raw_image.save(filepath, image_format)
+        image.save(filepath, "JPEG")
         return filename
-    except Exception:
+    except Exception as e:
+        # silently skip errors but print a debug line
+        # print(f"⚠️ Failed to fetch/save image: {e}")
         return None
 
 
@@ -309,7 +241,7 @@ def download_images_for_modifier(
     pokemon: str,
     folder: str,
     target_count: int,
-    modifier: str,
+    modifiers: List[str],
     min_width: int,
     min_height: int,
 ) -> int:
@@ -317,31 +249,26 @@ def download_images_for_modifier(
     if current_count >= target_count:
         return current_count
 
-    candidates = gather_candidates(driver, pokemon, modifier)
-    next_index = current_count + 1
     saved = 0
-    for candidate in candidates:
+    # Shuffle modifiers for variety
+    random_modifiers = modifiers[:]
+    random.shuffle(random_modifiers)
+
+    for modifier in random_modifiers:
         if current_count + saved >= target_count:
             break
-        if candidate.width and candidate.width < min_width:
-            continue
-        if candidate.height and candidate.height < min_height:
-            continue
-        saved_name = fetch_image(
-            session,
-            candidate.url,
-            folder,
-            pokemon,
-            next_index,
-            min_width,
-            min_height,
-        )
-        if saved_name:
-            saved += 1
-            next_index += 1
-            print(f"✅ Saved: {saved_name}")
+        candidates = gather_candidates(driver, pokemon, modifier)
+        next_index = current_count + saved + 1
+        for url in candidates:
+            if current_count + saved >= target_count:
+                break
+            saved_name = fetch_and_save_image(session, url, folder, pokemon, next_index, min_width, min_height)
+            if saved_name:
+                saved += 1
+                next_index += 1
+                print(f"✅ Saved: {saved_name}")
     total = current_count + saved
-    print(f"✨ {pokemon} ({modifier}): {total}/{target_count} images in {folder}")
+    print(f"✨ {pokemon}: {total}/{target_count} images saved in {folder}")
     return total
 
 
@@ -353,24 +280,11 @@ def fill_split(
     target_count: int,
     min_width: int,
     min_height: int,
-    modifiers: Iterable[str],
+    modifiers: List[str],
 ) -> None:
-    for modifier in modifiers:
-        total = download_images_for_modifier(
-            driver,
-            session,
-            pokemon,
-            folder,
-            target_count,
-            modifier,
-            min_width,
-            min_height,
-        )
-        if total >= target_count:
-            break
-    final_total = count_image_files(folder)
-    if final_total < target_count:
-        print(f"⚠️ {pokemon}: only {final_total}/{target_count} images in {folder}. Try rerunning later.")
+    total = download_images_for_modifier(driver, session, pokemon, folder, target_count, modifiers, min_width, min_height)
+    if total < target_count:
+        print(f"⚠️ {pokemon}: only {total}/{target_count} images saved in {folder}. Consider rerunning later.")
 
 
 def main() -> None:
@@ -414,7 +328,7 @@ def main() -> None:
                 TEST_CARD_QUERIES,
             )
 
-        print("\n✅ Finished scraping all requested Pokémon.")
+        print("\n✅ Finished scraping all requested Pokémon TCG card images.")
     finally:
         driver.quit()
         session.close()
