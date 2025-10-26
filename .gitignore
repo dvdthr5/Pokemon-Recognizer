@@ -1,5 +1,6 @@
 data/
 venv/
+venv311/
 verify_tf.py
 chromedriver-win64/
 .env
