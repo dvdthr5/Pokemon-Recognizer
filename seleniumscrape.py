@@ -199,8 +199,6 @@ def fetch_and_save_image(
     folder: str,
     pokemon: str,
     index: int,
-    min_width: int,
-    min_height: int,
 ) -> Optional[str]:
     try:
         response = session.get(url, timeout=12)
@@ -213,7 +211,6 @@ def fetch_and_save_image(
         image = Image.open(BytesIO(response.content))
         image.verify()  # Verify image integrity
         image = Image.open(BytesIO(response.content))  # Reopen for processing
-        width, height = image.size
 
         # Convert all images to JPEG format
         if image.mode != "RGB":
@@ -239,8 +236,6 @@ def download_images_for_modifier(
     folder: str,
     target_count: int,
     modifiers: List[str],
-    min_width: int,
-    min_height: int,
 ) -> int:
     current_count = count_image_files(folder)
     if current_count >= target_count:
@@ -259,7 +254,7 @@ def download_images_for_modifier(
         for url in candidates:
             if current_count + saved >= target_count:
                 break
-            saved_name = fetch_and_save_image(session, url, folder, pokemon, next_index, min_width, min_height)
+            saved_name = fetch_and_save_image(session, url, folder, pokemon, next_index)
             if saved_name:
                 saved += 1
                 next_index += 1
@@ -275,11 +270,9 @@ def fill_split(
     pokemon: str,
     folder: str,
     target_count: int,
-    min_width: int,
-    min_height: int,
     modifiers: List[str],
 ) -> None:
-    total = download_images_for_modifier(driver, session, pokemon, folder, target_count, modifiers, min_width, min_height)
+    total = download_images_for_modifier(driver, session, pokemon, folder, target_count, modifiers)
     if total < target_count:
         print(f"⚠️ {pokemon}: only {total}/{target_count} images saved in {folder}. Consider rerunning later.")
 
@@ -310,8 +303,6 @@ def main() -> None:
                 pokemon,
                 train_folder,
                 args.train_target,
-                args.min_width,
-                args.min_height,
                 TRAIN_CARD_QUERIES,
             )
             fill_split(
@@ -320,8 +311,6 @@ def main() -> None:
                 pokemon,
                 test_folder,
                 args.test_target,
-                args.min_width,
-                args.min_height,
                 TEST_CARD_QUERIES,
             )
 
