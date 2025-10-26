@@ -10,7 +10,12 @@ import requests
 from PIL import Image
 from io import BytesIO
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    ElementNotInteractableException,
+    NoSuchElementException,
+    WebDriverException,
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -37,7 +42,17 @@ TEST_CARD_QUERIES = [
     "pokemon tcg promo scan",
 ]
 BING_IMAGE_URL = "https://www.bing.com/images/search"
-SCROLL_PASSES = 10
+DEFAULT_MIN_IMAGE_WIDTH = 200
+DEFAULT_MIN_IMAGE_HEIGHT = 200
+SEE_MORE_SELECTORS = [
+    "a#btn_seemore",
+    "a.btn_seemore",
+    "a.see_more_link",
+    "a[data-automation='seeMoreButton']",
+    "a[aria-label='See more images']",
+]
+SEE_MORE_CLICK_ATTEMPTS = 5
+SCROLL_PASSES = 12
 SCROLL_PAUSE_SECONDS = 1.2
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -71,6 +86,18 @@ def parse_args() -> argparse.Namespace:
         "--headful",
         action="store_true",
         help="Show the Chrome window while scraping (useful for debugging).",
+    )
+    parser.add_argument(
+        "--min-width",
+        type=int,
+        default=DEFAULT_MIN_IMAGE_WIDTH,
+        help="Minimum width (pixels) a downloaded image must have to be saved.",
+    )
+    parser.add_argument(
+        "--min-height",
+        type=int,
+        default=DEFAULT_MIN_IMAGE_HEIGHT,
+        help="Minimum height (pixels) a downloaded image must have to be saved.",
     )
     return parser.parse_args()
 
@@ -150,6 +177,37 @@ def scroll_results(driver: webdriver.Chrome, passes: int = SCROLL_PASSES) -> Non
         last_height = new_height
 
 
+def click_see_more_button(driver: webdriver.Chrome) -> bool:
+    for selector in SEE_MORE_SELECTORS:
+        try:
+            button = driver.find_element(By.CSS_SELECTOR, selector)
+        except NoSuchElementException:
+            continue
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+        time.sleep(0.5)
+        try:
+            driver.execute_script("arguments[0].click();", button)
+        except ElementClickInterceptedException:
+            try:
+                button.click()
+            except Exception:
+                continue
+        except ElementNotInteractableException:
+            continue
+        time.sleep(1.2)
+        return True
+    return False
+
+
+def expand_search_results(driver: webdriver.Chrome) -> None:
+    scroll_results(driver)
+    for _ in range(SEE_MORE_CLICK_ATTEMPTS):
+        clicked = click_see_more_button(driver)
+        if not clicked:
+            break
+        scroll_results(driver, passes=max(4, SCROLL_PASSES // 2))
+
+
 def has_allowed_extension(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     path = parsed.path.lower()
@@ -168,7 +226,7 @@ def gather_candidates(driver: webdriver.Chrome, pokemon: str, modifier: str) -> 
 
     print(f"\n🔍 Searching: '{query}'")
     driver.get(search_url)
-    scroll_results(driver)
+    expand_search_results(driver)
 
     elements = driver.find_elements(By.CSS_SELECTOR, "img")
     seen_urls = set()
@@ -197,7 +255,15 @@ def ensure_rgb(image: Image.Image) -> Image.Image:
     return image.convert("RGB")
 
 
-def fetch_image(session: requests.Session, url: str, folder: str, pokemon: str, index: int) -> Optional[str]:
+def fetch_image(
+    session: requests.Session,
+    url: str,
+    folder: str,
+    pokemon: str,
+    index: int,
+    min_width: int,
+    min_height: int,
+) -> Optional[str]:
     try:
         response = session.get(url, timeout=12)
         response.raise_for_status()
@@ -215,6 +281,10 @@ def fetch_image(session: requests.Session, url: str, folder: str, pokemon: str, 
         raw_image = Image.open(BytesIO(response.content))
         raw_image.verify()
         raw_image = Image.open(BytesIO(response.content))
+        width, height = raw_image.size
+        if width < min_width or height < min_height:
+            return None
+
         if image_format == "JPEG":
             raw_image = ensure_rgb(raw_image)
 
@@ -231,6 +301,8 @@ def download_images_for_modifier(
     folder: str,
     target_count: int,
     modifier: str,
+    min_width: int,
+    min_height: int,
 ) -> int:
     current_count = count_image_files(folder)
     if current_count >= target_count:
@@ -242,7 +314,15 @@ def download_images_for_modifier(
     for candidate in candidates:
         if current_count + saved >= target_count:
             break
-        saved_name = fetch_image(session, candidate.url, folder, pokemon, next_index)
+        saved_name = fetch_image(
+            session,
+            candidate.url,
+            folder,
+            pokemon,
+            next_index,
+            min_width,
+            min_height,
+        )
         if saved_name:
             saved += 1
             next_index += 1
@@ -258,10 +338,21 @@ def fill_split(
     pokemon: str,
     folder: str,
     target_count: int,
+    min_width: int,
+    min_height: int,
     modifiers: Iterable[str],
 ) -> None:
     for modifier in modifiers:
-        total = download_images_for_modifier(driver, session, pokemon, folder, target_count, modifier)
+        total = download_images_for_modifier(
+            driver,
+            session,
+            pokemon,
+            folder,
+            target_count,
+            modifier,
+            min_width,
+            min_height,
+        )
         if total >= target_count:
             break
     final_total = count_image_files(folder)
@@ -289,8 +380,26 @@ def main() -> None:
             train_folder = ensure_split_folder(TRAIN_DIR, pokemon)
             test_folder = ensure_split_folder(TEST_DIR, pokemon)
 
-            fill_split(driver, session, pokemon, train_folder, args.train_target, TRAIN_CARD_QUERIES)
-            fill_split(driver, session, pokemon, test_folder, args.test_target, TEST_CARD_QUERIES)
+            fill_split(
+                driver,
+                session,
+                pokemon,
+                train_folder,
+                args.train_target,
+                args.min_width,
+                args.min_height,
+                TRAIN_CARD_QUERIES,
+            )
+            fill_split(
+                driver,
+                session,
+                pokemon,
+                test_folder,
+                args.test_target,
+                args.min_width,
+                args.min_height,
+                TEST_CARD_QUERIES,
+            )
 
         print("\n✅ Finished scraping all requested Pokémon.")
     finally:
