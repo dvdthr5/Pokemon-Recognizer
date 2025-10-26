@@ -46,37 +46,42 @@ def download_images(pokemon, folder, target_count, search_modifier=""):
         print(f"⚠️ {pokemon}: already {current_count}/{target_count}, skipping.")
         return
 
-    query = f"{pokemon} pokemon {search_modifier}"
-    search_url = f"https://www.bing.com/images/search?q={query}"
-
-    print(f"\n🔍 {pokemon}: need {remaining} more images. Searching '{query}'...")
-    driver.get(search_url)
-
-    # scroll
-    for _ in range(12):
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1.5)
-
-    imgs = driver.find_elements("tag name", "img")
-    urls = [img.get_attribute("src") for img in imgs if img.get_attribute("src")]
-    random.shuffle(urls)
+    modifiers = ["tcg card", "full art", "holo", "promo", "official art", "card scan"]
 
     count = current_count + 1
-    for url in urls:
+
+    for modifier in modifiers:
         if count > target_count:
             break
-        try:
-            resp = requests.get(url, timeout=10)
-            img = Image.open(BytesIO(resp.content)).convert("RGB")
-            fname = f"{pokemon}_{count:03d}.jpg"
-            fpath = os.path.join(folder, fname)
-            if os.path.exists(fpath):
-                continue
-            img.save(fpath, "JPEG")
-            print(f"✅ Saved: {fname}")
-            count += 1
-        except Exception as e:
-            print(f"⚠️ Skip image: {e}")
+        print(f"\n🔍 {pokemon}: searching with modifier '{modifier}' (need {target_count - count + 1} more images)...")
+        query = f"{pokemon} pokemon {modifier}"
+        search_url = f"https://www.bing.com/images/search?q={query}"
+        driver.get(search_url)
+
+        # scroll
+        for _ in range(12):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1.5)
+
+        imgs = driver.find_elements("tag name", "img")
+        urls = [img.get_attribute("src") for img in imgs if img.get_attribute("src")]
+        random.shuffle(urls)
+
+        for url in urls:
+            if count > target_count:
+                break
+            try:
+                resp = requests.get(url, timeout=10)
+                img = Image.open(BytesIO(resp.content)).convert("RGB")
+                fname = f"{pokemon}_{count:03d}.jpg"
+                fpath = os.path.join(folder, fname)
+                if os.path.exists(fpath):
+                    continue
+                img.save(fpath, "JPEG")
+                print(f"✅ Saved: {fname}")
+                count += 1
+            except Exception as e:
+                print(f"⚠️ Skip image: {e}")
 
     print(f"✨ Done with {pokemon}. Now {count-1}/{target_count} in {folder}")
 
