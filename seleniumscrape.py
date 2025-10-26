@@ -28,7 +28,6 @@ TRAIN_TARGET = 240
 TEST_TARGET = 60
 
 ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png")
-ALLOWED_MIME_KEYWORDS = ("image/jpeg", "image/jpg", "image/png")
 CARD_KEYWORDS = (
     "card",
     "tcg",
@@ -54,10 +53,8 @@ TEST_CARD_QUERIES = [
     "pokemon tcg reverse holo",
 ]
 BING_IMAGE_SEARCH_URL = "https://www.bing.com/images/search?q="
-DEFAULT_MIN_WIDTH = 150
-DEFAULT_MIN_HEIGHT = 150
 SCROLL_PAUSE = 0.8
-SCROLL_PASSES = 25
+SCROLL_PASSES = 12
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -84,18 +81,6 @@ def parse_args() -> argparse.Namespace:
         "--headful",
         action="store_true",
         help="Show the Chrome window while scraping (useful for debugging).",
-    )
-    parser.add_argument(
-        "--min-width",
-        type=int,
-        default=DEFAULT_MIN_WIDTH,
-        help="Minimum width (pixels) a downloaded image must have to be saved.",
-    )
-    parser.add_argument(
-        "--min-height",
-        type=int,
-        default=DEFAULT_MIN_HEIGHT,
-        help="Minimum height (pixels) a downloaded image must have to be saved.",
     )
     return parser.parse_args()
 
@@ -182,12 +167,11 @@ def gather_candidates(driver: webdriver.Chrome, pokemon: str, modifier: str) -> 
     driver.get(search_url)
     scroll_results(driver)
 
-    # Bing image thumbnails have class 'mimg'
     images = driver.find_elements(By.CSS_SELECTOR, "img.mimg")
     urls = set()
     for img in images:
         src = img.get_attribute("src")
-        if src and src.startswith("http") and src not in urls:
+        if src and src.startswith("http") and src.lower().endswith(ALLOWED_EXTENSIONS):
             urls.add(src)
     print(f"🖼️ Found {len(urls)} image candidates for '{pokemon}' ({modifier}).")
     return list(urls)
@@ -203,16 +187,11 @@ def fetch_and_save_image(
     try:
         response = session.get(url, timeout=12)
         response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "").lower()
-        if content_type and "image" not in content_type:
-            print(f"⚠️ Skipping invalid image content type: {content_type}")
-            return None
 
         image = Image.open(BytesIO(response.content))
-        image.verify()  # Verify image integrity
-        image = Image.open(BytesIO(response.content))  # Reopen for processing
+        image.verify()
+        image = Image.open(BytesIO(response.content))
 
-        # Convert all images to JPEG format
         if image.mode != "RGB":
             image = image.convert("RGB")
 
@@ -223,48 +202,11 @@ def fetch_and_save_image(
 
         image.save(filepath, "JPEG")
         return filename
-    except Exception as e:
-        # silently skip errors but print a debug line
-        # print(f"⚠️ Failed to fetch/save image: {e}")
+    except Exception:
         return None
 
 
-def download_images_for_modifier(
-    driver: webdriver.Chrome,
-    session: requests.Session,
-    pokemon: str,
-    folder: str,
-    target_count: int,
-    modifiers: List[str],
-) -> int:
-    current_count = count_image_files(folder)
-    if current_count >= target_count:
-        return current_count
-
-    saved = 0
-    # Shuffle modifiers for variety
-    random_modifiers = modifiers[:]
-    random.shuffle(random_modifiers)
-
-    for modifier in random_modifiers:
-        if current_count + saved >= target_count:
-            break
-        candidates = gather_candidates(driver, pokemon, modifier)
-        next_index = current_count + saved + 1
-        for url in candidates:
-            if current_count + saved >= target_count:
-                break
-            saved_name = fetch_and_save_image(session, url, folder, pokemon, next_index)
-            if saved_name:
-                saved += 1
-                next_index += 1
-                print(f"✅ Saved: {saved_name}")
-    total = current_count + saved
-    print(f"✨ {pokemon}: {total}/{target_count} images saved in {folder}")
-    return total
-
-
-def fill_split(
+def download_images_for_split(
     driver: webdriver.Chrome,
     session: requests.Session,
     pokemon: str,
@@ -272,9 +214,24 @@ def fill_split(
     target_count: int,
     modifiers: List[str],
 ) -> None:
-    total = download_images_for_modifier(driver, session, pokemon, folder, target_count, modifiers)
-    if total < target_count:
-        print(f"⚠️ {pokemon}: only {total}/{target_count} images saved in {folder}. Consider rerunning later.")
+    print(f"\nStarting download for {pokemon} in folder {folder} aiming for {target_count} images.")
+    for modifier in modifiers:
+        current_count = count_image_files(folder)
+        if current_count >= target_count:
+            break
+        urls = gather_candidates(driver, pokemon, modifier)
+        random.shuffle(urls)
+        for url in urls:
+            current_count = count_image_files(folder)
+            if current_count >= target_count:
+                break
+            saved_name = fetch_and_save_image(session, url, folder, pokemon, current_count + 1)
+            if saved_name:
+                print(f"✅ Saved: {saved_name}")
+    final_count = count_image_files(folder)
+    print(f"✨ {pokemon}: {final_count}/{target_count} images saved in {folder}")
+    if final_count < target_count:
+        print(f"⚠️ {pokemon}: only {final_count}/{target_count} images saved. Consider rerunning later.")
 
 
 def main() -> None:
@@ -297,7 +254,7 @@ def main() -> None:
             train_folder = ensure_split_folder(TRAIN_DIR, pokemon)
             test_folder = ensure_split_folder(TEST_DIR, pokemon)
 
-            fill_split(
+            download_images_for_split(
                 driver,
                 session,
                 pokemon,
@@ -305,7 +262,8 @@ def main() -> None:
                 args.train_target,
                 TRAIN_CARD_QUERIES,
             )
-            fill_split(
+
+            download_images_for_split(
                 driver,
                 session,
                 pokemon,
