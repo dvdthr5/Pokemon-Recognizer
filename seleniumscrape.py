@@ -214,9 +214,6 @@ def fetch_and_save_image(
         image.verify()  # Verify image integrity
         image = Image.open(BytesIO(response.content))  # Reopen for processing
         width, height = image.size
-        if width < min_width or height < min_height:
-            print(f"⚠️ Skipping image smaller than {min_width}x{min_height}: {width}x{height}")
-            return None
 
         # Convert all images to JPEG format
         if image.mode != "RGB":
