@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 import time
@@ -41,19 +42,15 @@ TEST_CARD_QUERIES = [
     "pokemon tcg reverse holo card",
     "pokemon tcg promo scan",
 ]
-BING_IMAGE_URL = "https://www.bing.com/images/search"
-DEFAULT_MIN_IMAGE_WIDTH = 200
-DEFAULT_MIN_IMAGE_HEIGHT = 200
+GOOGLE_IMAGE_URL = "https://www.google.com/search?tbm=isch&q="
+DEFAULT_MIN_IMAGE_WIDTH = 150
+DEFAULT_MIN_IMAGE_HEIGHT = 150
 SEE_MORE_SELECTORS = [
-    "a#btn_seemore",
-    "a.btn_seemore",
-    "a.see_more_link",
-    "a[data-automation='seeMoreButton']",
-    "a[aria-label='See more images']",
+    ".mye4qd",
 ]
-SEE_MORE_CLICK_ATTEMPTS = 5
-SCROLL_PASSES = 12
-SCROLL_PAUSE_SECONDS = 1.2
+SEE_MORE_CLICK_ATTEMPTS = 6
+SCROLL_PASSES = 30
+SCROLL_PAUSE_SECONDS = 0.8
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -66,6 +63,8 @@ REQUEST_HEADERS = {
 class ImageCandidate:
     url: str
     alt_text: str
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,31 +220,36 @@ def looks_like_card(url: str, alt_text: str, modifier: str) -> bool:
 
 def gather_candidates(driver: webdriver.Chrome, pokemon: str, modifier: str) -> List[ImageCandidate]:
     query = build_query(pokemon, modifier)
-    encoded_query = urllib.parse.quote_plus(query)
-    search_url = f"{BING_IMAGE_URL}?q={encoded_query}&form=HDRSC2&first=1&tsc=ImageBasicHover"
+    search_url = f"{GOOGLE_IMAGE_URL}{urllib.parse.quote_plus(query)}"
 
     print(f"\n🔍 Searching: '{query}'")
     driver.get(search_url)
-    expand_search_results(driver)
 
-    elements = driver.find_elements(By.CSS_SELECTOR, "img")
-    seen_urls = set()
+    # Scroll to load images
+    for _ in range(SCROLL_PASSES):
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(SCROLL_PAUSE_SECONDS)
+        try:
+            see_more = driver.find_element(By.CSS_SELECTOR, ".mye4qd")
+            if see_more.is_displayed():
+                driver.execute_script("arguments[0].click();", see_more)
+                time.sleep(SCROLL_PAUSE_SECONDS)
+        except NoSuchElementException:
+            pass
+
+    images = driver.find_elements(By.CSS_SELECTOR, ".rg_i")
     candidates: List[ImageCandidate] = []
-    for element in elements:
-        src = element.get_attribute("src") or element.get_attribute("data-src")
-        alt_text = element.get_attribute("alt") or ""
-        if not src or src.startswith("data:"):
+    seen_urls = set()
+    for img in images:
+        src = img.get_attribute("src") or img.get_attribute("data-src")
+        alt_text = img.get_attribute("alt") or ""
+        if not src:
             continue
-        if not has_allowed_extension(src):
+        if src in seen_urls:
             continue
-        if not looks_like_card(src, alt_text, modifier):
-            continue
-        normalized = src.split("?")[0]
-        if normalized in seen_urls:
-            continue
-        seen_urls.add(normalized)
+        seen_urls.add(src)
         candidates.append(ImageCandidate(url=src, alt_text=alt_text))
-    print(f"🖼️ Found {len(candidates)} card-like candidates for '{pokemon}' ({modifier}).")
+    print(f"🖼️ Found {len(candidates)} candidates for '{pokemon}' ({modifier}).")
     return candidates
 
 
@@ -268,10 +272,15 @@ def fetch_image(
         response = session.get(url, timeout=12)
         response.raise_for_status()
         content_type = response.headers.get("Content-Type", "").lower()
-        if not any(mime in content_type for mime in ALLOWED_MIME_KEYWORDS):
-            return None
+        if content_type:
+            if not any(mime in content_type for mime in ALLOWED_MIME_KEYWORDS):
+                return None
+        else:
+            if not has_allowed_extension(url):
+                return None
 
-        image_format = "PNG" if "png" in content_type else "JPEG"
+        is_png = "png" in content_type if content_type else url.lower().endswith(".png")
+        image_format = "PNG" if is_png else "JPEG"
         extension = ".png" if image_format == "PNG" else ".jpg"
         filename = f"{pokemon}_{index:03d}{extension}"
         filepath = os.path.join(folder, filename)
@@ -314,6 +323,10 @@ def download_images_for_modifier(
     for candidate in candidates:
         if current_count + saved >= target_count:
             break
+        if candidate.width and candidate.width < min_width:
+            continue
+        if candidate.height and candidate.height < min_height:
+            continue
         saved_name = fetch_image(
             session,
             candidate.url,
