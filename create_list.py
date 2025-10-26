@@ -11,7 +11,10 @@ def fetch_pokemon_names():
     soup = BeautifulSoup(resp.text, "html.parser")
     table = soup.find("table", {"id": "pokedex"})
 
+    allowed_variants = {"alolan", "galarian", "hisuian"}
     names = []
+    filtered_forms = set()
+
     for row in table.tbody.find_all("tr"):
         name_cell = row.find("a", {"class": "ent-name"})
         variant_cell = row.find("small", {"class": "text-muted"})
@@ -23,7 +26,12 @@ def fetch_pokemon_names():
         # If a variant exists, append it in parentheses, e.g. "meowth (alolan)"
         if variant_cell:
             variant = variant_cell.text.strip().lower()
-            name = f"{base_name} ({variant})"
+            # Filter only allowed regional variants
+            if variant in allowed_variants:
+                name = f"{base_name} ({variant})"
+            else:
+                filtered_forms.add(f"{base_name} ({variant})")
+                continue
         else:
             name = base_name
 
@@ -38,6 +46,8 @@ def fetch_pokemon_names():
 
         names.append(name)
 
+    print(f"Filtered out {len(filtered_forms)} non-base/non-regional forms: {', '.join(sorted(filtered_forms))}" if filtered_forms else "No non-base/non-regional forms filtered out.")
+    print(f"Kept {len(names)} base and regional variant Pokémon.")
     return names
 
 def save_names(names, filename=OUTPUT_FILE):
